@@ -42,8 +42,11 @@ def pooled_mean(index: dict, experiment: str, key: str = "loss") -> float:
 
 def load(results: str, baseline: str, method: str) -> pd.DataFrame:
     """Compute paired statistics for every run against its split baseline."""
+    # Follow symlinks, so that runs from multiple results directories can be
+    # combined into one directory of links.
     index = tss.index(
-        results, r"^(?P<experiment>.*)/eval/(?P<trace>.*)/metrics\.npz$")
+        results, r"^(?P<experiment>.*)/eval/(?P<trace>.*)/metrics\.npz$",
+        follow_symlinks=True)
     experiments = [
         f"{name}/{split}" for name in (baseline, method) for split in SPLITS
         if f"{name}/{split}" in index]
@@ -167,7 +170,10 @@ def plot(df: pd.DataFrame, baseline: str, method: str, out: str) -> None:
     labels = ("Baseline (linear patch)", f"{method.capitalize()} tokenizer")
 
     fig, ax = plt.subplots(figsize=(6.4, 4.4), facecolor=SURFACE)
-    _curves(ax, base, meth, labels, yerr_method=_col(meth, "ci95_split"))
+    # Legend only: the curves converge at p100, so direct labels collide.
+    _curves(
+        ax, base, meth, labels, yerr_method=_col(meth, "ci95_split"),
+        direct_labels=False)
     _style(ax, "Test loss vs training set size (95% paired CI)")
     ax.set_xlim(0.08, 1.6)
     fig.tight_layout()
@@ -184,10 +190,13 @@ def plot(df: pd.DataFrame, baseline: str, method: str, out: str) -> None:
     ]
     fig, axes = plt.subplots(
         1, 3, figsize=(15, 4.4), facecolor=SURFACE, sharey=True)
-    for ax, (title, ym, yb) in zip(axes, variants):
+    # Draw every panel before styling, so that the shared y limits include
+    # the widest error bars.
+    for ax, (_, ym, yb) in zip(axes, variants):
         _curves(
             ax, base, meth, labels, yerr_method=ym, yerr_base=yb,
             direct_labels=False)
+    for ax, (title, _, _) in zip(axes, variants):
         _style(ax, title)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "scaling_ci_methods.png"), dpi=200)

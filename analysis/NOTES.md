@@ -79,4 +79,112 @@ the right question: on the same input, is model A better than model B?
 
 ## Results
 
-_TODO: fill in from `results_table.md` and `scaling.png` once runs finish._
+Generated with `uv run analysis/scaling.py --results results_final`, where
+`results_final/` symlinks the 8 runs (7 trained on ROBO `gpu:h100:2`, `conv/p10`
+on GPU-shared `gpu:h100-80:2`; identical code, 2-GPU DDP, effective batch 64).
+Test set: 25 traces, n = 329,895 frames. Δ is the paired per-sample difference
+vs the baseline trained on the same split; the CI is the two-sided 95% interval
+(±1.96 × ESS-corrected stderr, from `nrdk.tss`); Δ% is relative to the
+same-split baseline.
+
+| Split | Baseline test loss | Conv test loss | Δ (paired) | 95% CI | Δ % | ESS / n | Significant |
+|---|---|---|---|---|---|---|---|
+| p10 | 0.18135 | 0.17217 | −0.00917 | ±0.00256 | −5.06% ± 1.41% | 706 / 329,895 | Yes |
+| p20 | 0.16495 | 0.15810 | −0.00685 | ±0.00312 | −4.16% ± 1.89% | 803 / 329,895 | Yes |
+| p50 | 0.13856 | 0.13470 | −0.00386 | ±0.00138 | −2.78% ± 1.00% | 1,390 / 329,895 | Yes |
+| p100 | 0.12521 | 0.12526 | +0.00005 | ±0.00137 | +0.04% ± 1.10% | 1,226 / 329,895 | No |
+
+![scaling](scaling.png)
+
+Training (early stopping, patience 3 validation checks at 0.25-epoch interval):
+
+| Run | Train time | Best checkpoint |
+|---|---|---|
+| baseline p10 / conv p10 | 0.45 h / 0.43 h | step 4,376 / step 2,188 |
+| baseline p20 / conv p20 | 0.79 h / 0.69 h | step 8,756 / step 4,378 |
+| baseline p50 / conv p50 | 1.38 h / 1.47 h | step 21,892 / step 21,892 |
+| baseline p100 / conv p100 | 2.77 h / 3.30 h | step 32,840 / step 43,786 |
+
+Supporting numbers for the conceptual questions (conv vs baseline, 95% CI
+half-widths):
+
+| Split | Paired, ESS (correct) | Paired, naive std/√n | Ratio | Unpaired conv / baseline (each) |
+|---|---|---|---|---|
+| p10 | ±0.00256 | ±0.00012 | 21.6× | ±0.00944 / ±0.01109 |
+| p20 | ±0.00312 | ±0.00015 | 20.3× | ±0.00875 / ±0.01163 |
+| p50 | ±0.00138 | ±0.00009 | 15.4× | ±0.00790 / ±0.00848 |
+| p100 | ±0.00137 | ±0.00008 | 16.4× | ±0.00753 / ±0.00698 |
+
+![ci methods](scaling_ci_methods.png)
+
+- *Naive std/√n:* ESS is only 700–1,400 of 329,895 frames for the paired
+  difference (≈ 1 effective sample per 240–470 frames), and 360–390 for each
+  model's absolute loss. The naive interval is 15–22× too narrow, so the error
+  bars vanish in the middle panel, and even the p100 difference (+0.04%)
+  would look "significant" against such bars, i.e. a false positive.
+- *Unpaired:* the per-model intervals (±0.007–0.012) are 3–7× wider than
+  the paired interval of the difference, and overlap at every split (right
+  panel), so the unpaired comparison cannot detect even the 5% gain at p10.
+  Pairing helps twice: the per-sample std drops from 0.076–0.091 (absolute
+  loss) to 0.025–0.045 (difference), because scene difficulty is shared by both
+  models; and the difference is less autocorrelated (ESS 700–1,400 vs
+  360–390).
+
+## Analysis of the proposed change
+
+**Is it significantly better?** Yes at p10, p20 and p50: the conv tokenizer
+lowers test loss by 5.1%, 4.2% and 2.8%, with paired 95% CIs that exclude 0
+(±1.4%, ±1.9%, ±1.0%). At p100 it is statistically indistinguishable from the
+baseline (+0.04% ± 1.10%). It is not worse at any split.
+
+**Does it scale?** The gap shrinks monotonically as the training set grows
+(−5.1% → −4.2% → −2.8% → 0%). On log-log axes the conv curve is flatter: a
+power-law fit between p10 and p100 gives exponents of ≈ 0.14 for conv vs ≈ 0.16
+for the baseline. This is the expected signature of an inductive bias: locality
+and translation equivariance substitute for data when data is scarce, but the
+transformer learns equivalent local features on its own given the full training
+set. Extrapolating, the curves cross around p100; there is no evidence the
+change helps, or hurts, beyond the full dataset.
+
+**Is it an improvement overall?** Yes, but a qualified one. It is a strict
+improvement for data efficiency: conv at p20 (0.158) closes about a quarter
+of the gap between baseline p20 (0.165) and baseline p50 (0.139), and it reached its best
+validation loss in fewer steps at p10/p20 (best checkpoint at the first or
+second validation check). At full data it gives no gain, at an estimated ~20% more
+FLOPs per sample and a slightly longer training run (more steps before early stopping at
+p100). So it is worth using when labeled radar data is limited, which for
+radar is the common case. Caveats: one training seed per configuration (the
+CIs capture test-set sampling noise, not seed-to-seed training variance), and
+the p100 run used one ConvNeXt configuration (`d_conv=128`, `depth=2`) without
+tuning.
+
+## Evaluation and validation set sizes
+
+**Evaluation set: right-sized in content, oversized in frames.** The 25 test
+traces (n = 329,895) contain only ~360–390 effective independent samples per
+model, and ~700–1,400 for paired differences. That yields a ±1.0–1.9%
+resolution on paired differences: enough to detect the 3–5% gains here, but not
+to resolve effects under ~1% (the p100 result cannot rule out a ±1% effect).
+Because ESS is limited by the number of distinct scenes rather than frames,
+the set is too small in terms of independent content (more, and more diverse,
+recordings would shrink the CIs). At the same time, it is far too large in
+frames for the information it carries: evaluating every frame takes ~50 GPU-min
+per model, while temporal subsampling by ~10× would barely change ESS (1 effective
+sample per ~250+ frames). I'd keep the set, evaluate on a strided subset of
+frames, and spend the savings on additional test recordings.
+
+**Validation set: 20% is too large.** Validation loss tracks test loss closely
+(baseline p100: best val 0.1228 vs test 0.1252; baseline p10: 0.178 vs 0.181), and
+the validation pass is already subsampled to 16,384 frames drawn from the
+same (temporally correlated) recordings. Near the optimum, consecutive validation losses differ by
+less than ~0.001 (conv p100: 0.1237, 0.1235, 0.1236, 0.1229), so checkpoint
+selection is already limited by within-recording correlation, not by the
+number of held-out frames, and a larger hold-out does not buy proportionally
+better model selection. Meanwhile, the hold-out costs 20% of the training
+data, and the scaling curves are steep at small sizes (baseline: −9% loss from
+p10 to p20); at p10 the overfitting onset is sharp (val loss bottoms at the
+first or second check and rises 6–8% within two more), so a modestly
+noisier validation signal would still catch it. I'd reduce the hold-out to
+~5–10% of each recording (or hold out a few whole recordings, which would also
+make validation more representative of the recording-level test split) and
+return the rest to training.
