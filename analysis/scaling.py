@@ -17,6 +17,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
 
 from nrdk import tss
 
@@ -102,7 +103,7 @@ def write_table(df: pd.DataFrame, out: str) -> None:
     print("\n".join(rows))
 
 
-def _style(ax: plt.Axes, title: str) -> None:
+def _style(ax: Axes, title: str) -> None:
     """Log-log axes with recessive grid and text-token labels."""
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -129,7 +130,7 @@ def _style(ax: plt.Axes, title: str) -> None:
 
 
 def _curves(
-    ax: plt.Axes, base: pd.DataFrame, meth: pd.DataFrame, labels: tuple,
+    ax: Axes, base: pd.DataFrame, meth: pd.DataFrame, labels: tuple,
     yerr_method: np.ndarray | None = None,
     yerr_base: np.ndarray | None = None, direct_labels: bool = True,
 ) -> None:
@@ -154,6 +155,11 @@ def _curves(
     ax.legend(frameon=False, fontsize=9, labelcolor=TEXT)
 
 
+def _col(df: pd.DataFrame, key: str) -> np.ndarray:
+    """Get a column as a float array."""
+    return df[key].to_numpy(dtype=float)
+
+
 def plot(df: pd.DataFrame, baseline: str, method: str, out: str) -> None:
     """Main scaling plot plus a comparison of error-bar methods."""
     base = df[df["method"] == baseline]
@@ -161,7 +167,7 @@ def plot(df: pd.DataFrame, baseline: str, method: str, out: str) -> None:
     labels = ("Baseline (linear patch)", f"{method.capitalize()} tokenizer")
 
     fig, ax = plt.subplots(figsize=(6.4, 4.4), facecolor=SURFACE)
-    _curves(ax, base, meth, labels, yerr_method=meth["ci95_split"].values)
+    _curves(ax, base, meth, labels, yerr_method=_col(meth, "ci95_split"))
     _style(ax, "Test loss vs training set size (95% paired CI)")
     ax.set_xlim(0.08, 1.6)
     fig.tight_layout()
@@ -170,11 +176,11 @@ def plot(df: pd.DataFrame, baseline: str, method: str, out: str) -> None:
 
     variants = [
         ("Paired, ESS-corrected (correct)",
-         Z95 * meth["rel_split/stderr"].values, None),
+         Z95 * _col(meth, "rel_split/stderr"), None),
         ("Paired, naive std/√n",
-         Z95 * meth["naive_stderr_split"].values, None),
+         Z95 * _col(meth, "naive_stderr_split"), None),
         ("Unpaired, ESS-corrected",
-         Z95 * meth["abs/stderr"].values, Z95 * base["abs/stderr"].values),
+         Z95 * _col(meth, "abs/stderr"), Z95 * _col(base, "abs/stderr")),
     ]
     fig, axes = plt.subplots(
         1, 3, figsize=(15, 4.4), facecolor=SURFACE, sharey=True)
