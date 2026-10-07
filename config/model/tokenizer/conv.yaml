@@ -1,0 +1,15 @@
+_target_: grt.conv_tokenizer.ConvSpectrumTokenizer
+d_model: ${size.d_model}
+patch:  # (time, doppler, elevation, azimuth, range)
+- 1
+- 2
+- ${array.elevation}
+- ${array.azimuth}
+- 4
+squeeze: [2, 3]  # elevation + azimuth
+n_channels: 3  # (amplitude, sin(angle), cos(angle))
+scale: [16.0, 16.0, 16.0]
+w_min: 0.2
+d_conv: 128
+depth: 2
+kernel_size: 7
